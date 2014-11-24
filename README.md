@@ -3,6 +3,8 @@ EkoOlimp2014
 
 Code for Econometric Competition at Vilnius University 2014
 
+Team: Lito ruduo
+
 Goal was to investigate effect of Euro adoption in Lithuania on prices
 
 Analysis, including data preparation and presentation done in one day
