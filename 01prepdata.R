@@ -1,0 +1,120 @@
+source("00functions.R")
+
+common.names <- c("Country", "Time", "Variable", "Value")
+ 
+#Prepare data on Consumer Price INdex  
+
+#drop some columns and reorder for common order 
+hicp  <- fread("raw_data/hicp.csv", na.strings= ":", stringsAsFactors = FALSE)
+hicp <- hicp[, INFOTYPE := NULL]
+hicp <- hicp[, c(3, 2, 1, 4), with = F]
+setnames(hicp, common.names)
+hicp$Value <- as.numeric(hicp$Value)
+
+#make nice names
+hicp$Variable <- paste0("y_", hicp$Variable)
+
+#agregate 
+hicp$Time <- MakeQuarter(hicp$Time)
+hicp <- hicp[, list(Value = mean(Value)), by = list(Country, Variable, Time)]
+setcolorder(hicp, common.names)
+
+# 
+#Read GDP data 
+
+#removing unnecessary cols, order of names, etc.
+gdp <- fread("raw_data/gdp.csv", stringsAsFactors = F, na.strings = ":")
+gdp <- remove.vars(gdp, c("UNIT", "S_ADJ"))
+gdp <- setnames(gdp, c("Time", "Country", "Variable", "Value"))
+setcolorder(gdp, common.names)
+gdp$Value <- as.numeric(gsub("\\,| ", "", gdp$Value))
+
+#Read population
+pop <- fread("raw_data/pop.csv", stringsAsFactors = F, na.strings = ":")
+pop <- remove.vars(pop, c("AGE", "SEX"))
+pop <- rename.vars(pop, names(pop), c("Time", "Country", "Value"))
+pop$Variable <- "Population"
+pop <- pop[, common.names, with = F]
+pop$Value <- as.numeric(gsub(" ", "", pop$Value))
+
+popQ1 <- pop
+popQ2 <- pop
+popQ3 <- pop
+popQ4 <- pop
+
+popQ1$Time <- paste0(pop$Time, "Q1")
+popQ2$Time <- paste0(pop$Time, "Q2")
+popQ3$Time <- paste0(pop$Time, "Q3")
+popQ4$Time <- paste0(pop$Time, "Q4")
+
+pop <- rbind(popQ1, popQ2, popQ3, popQ4) 
+rm(popQ1, popQ2, popQ3, popQ4)
+
+
+#
+#Read conversion rates  
+
+#removing unnecessary cols, order of names, etc.
+conv <- fread("raw_data/conversion.rates.csv", stringsAsFactors = F, na.strings = ":")
+conv <- setnames(conv, c("Time", "Country", "Variable", "Value"))
+conv$Variable <- "Euro dummy"
+setcolorder(conv, common.names)
+conv$Value <- as.numeric(as.numeric(conv$Value) == 1) #Euro adoption dummy when rate = 1
+
+
+#Bad starting dates for some countries
+conv[which(conv$Country %in% c("Austria", "Belgium", "Finland",
+                               "France", "Ireland",
+                               "Germany (until 1990 former territory of the FRG)",
+                               "Italy", "Luxembourg", "Netherlands", "Portugal", "Spain") &
+             Time == "1998Q4"), Value := 0]
+
+# Change start dates for some countries 
+conv[which(conv$Country %in% "Greece" & conv$Time %in% paste0(1995:2000, "Q", rep(1:4, each = length(1995:2000)))),
+     Value := 0]
+conv[which(conv$Country %in% "Malta" & conv$Time %in% paste0(1995:2007, "Q", rep(1:4, each = length(1995:2007)))),
+     Value := 0]
+conv[which(conv$Country %in% "Estonia" & conv$Time %in% paste0(1995:2010, "Q", rep(1:4, each = length(1995:2010)))),
+     Value := 0]
+conv[which(conv$Country %in% "Slovenia" & conv$Time %in% paste0(1995:2006, "Q", rep(1:4, each = length(1995:2006)))),
+     Value := 0]
+conv[which(conv$Country %in% "Slovakia" & conv$Time %in% paste0(1995:2008, "Q", rep(1:4, each = length(1995:2008)))),
+     Value := 0]
+
+#
+#Read unemployment data
+# 
+
+#removing unnecessary cols, order of names, etc.
+unempl <- fread("raw_data/unemployment.csv", stringsAsFactors = F, na.strings = ":")
+unempl <- remove.vars(unempl, c("SEX", "S_ADJ", "AGE"))
+unempl$Variable <- "Unemployment rate"
+unempl <- setnames(unempl, c("Time", "Country", "Value", "Variable"))
+unempl <- setcolorder(unempl, common.names)
+unempl$Value <- as.numeric(unempl$Value) / 100
+
+#
+#Combine datasets
+
+data.full <- rbind(hicp, gdp, conv, unempl, pop)
+data.full$Value <- as.numeric(data.full$Value)
+
+nice.names <- unique(data.frame(nice_name = gsub("y_", "", data.full$Variable), short_name = MakeShortName(data.full$Variable)))
+data.full$Variable <- MakeShortName(data.full$Variable)
+
+try.res <- try(data.cast <- dcast.data.table(data.full, Country + Time ~ Variable, value.var = "Value"), silent = T)
+if (class(try.res) == "try-error"){
+  data.cast <- dcast(data.full, Country + Time ~ Variable, value.var = "Value")
+}
+data.cast <- data.cast[data.cast$Country %in% EU.countries, ]
+
+#Modify Lithuania 
+data.cast[which(data.cast$Country == "Lithuania"), ]$Eurodummy <- 0 #was NA
+
+#Create growh vars
+data.cast <- PanelDiff(data.cast, lag = 4, vars = names(data.cast)[-c(1:2)], name = "gr", divide = TRUE)
+data.cast$Grossdomesticpr <- data.cast$Grossdomesticpr / data.cast$Population
+
+# 
+write.csv(nice.names, "processed_data/nicenames.csv")
+saveRDS(data.cast, file = "processed_data/dt.cast.Rda")
